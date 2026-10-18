@@ -553,8 +553,32 @@ const usePart = (s: OrreryState, p: PartState): OrreryState => {
     throw Error("invalid aperture index");
   const error = placementError(s.editor.parts, p, s.challenge);
   if (error) throw Error(error);
+  let sim = s.sim;
+  if (sim && rows(p)) {
+    sim = {
+      ...sim,
+      poses: [
+        ...sim.poses,
+        {
+          part: p.id,
+          rotation: p.rotation,
+          length: p.length,
+          cell: { q: p.q, r: p.r },
+        },
+      ],
+    };
+    if (p.kind === "wheel")
+      for (let d = 0; d < 6; d++)
+        sim = spawn(
+          sim,
+          add(p, offset(d)),
+          C.WHEEL_MOTES[mod(d - p.rotation, 6)],
+          p.id,
+        );
+  }
   return {
     ...s,
+    sim,
     editor: {
       ...s.editor,
       parts: [...s.editor.parts, p],
@@ -738,8 +762,6 @@ const component = (sim: SimState, id: number): Set<number> => {
   }
   return ids;
 };
-const heldBy = (sim: SimState, part: number, mote: number) =>
-  sim.grips.some((g) => g.part === part && component(sim, g.mote).has(mote));
 const holdingGrip = (sim: SimState, mote: number) =>
   sim.grips.find((g) => component(sim, g.mote).has(mote));
 const sigilPhase = (input: SimState, parts: readonly PartState[]): SimState => {
@@ -749,33 +771,38 @@ const sigilPhase = (input: SimState, parts: readonly PartState[]): SimState => {
       (p) => C.SIGIL_GLYPH_PATHS[p.kind as keyof typeof C.SIGIL_GLYPH_PATHS],
     )
     .sort((a, b) => a.r - b.r || a.q - b.q);
-  const waves = [
-    "wane",
-    "mirror",
-    "ascend",
-    "conjoin",
-    "eclipse",
-    "confluence",
-    "dispersion",
-    "bind",
-    "manifold",
-    "triune",
-    "sunder",
-    "void",
+  const waves: PartKind[][] = [
+    [
+      "wane",
+      "mirror",
+      "ascend",
+      "conjoin",
+      "eclipse",
+      "confluence",
+      "dispersion",
+    ],
+    ["bind", "manifold", "triune"],
+    ["sunder"],
+    ["void"],
   ];
-  for (const kind of waves)
-    for (const p of ordered.filter((p) => p.kind === kind)) {
+  for (const wave of waves)
+    for (const p of ordered.filter((p) => wave.includes(p.kind))) {
+      const kind = p.kind;
       const cell = (q: number, r: number) =>
         add(p, rotate({ q, r }, p.rotation));
       const at = (q: number, r: number) =>
-        sim.motes.find((m) => same(m, cell(q, r)));
+        sim.motes.find(
+          (m) =>
+            same(m, cell(q, r)) &&
+            (m.wheel === null || (kind === "mirror" && q === 0 && r === 0)),
+        );
       const a = at(0, 0),
         b = at(1, 0);
       const clear = (m: MoteState | undefined) =>
         !!m &&
         m.wheel === null &&
         !sim.filaments.some((f) => f.a === m.id || f.b === m.id) &&
-        !sim.grips.some((g) => g.mote === m.id);
+        !sim.grips.some((g) => component(sim, m.id).has(g.mote));
       const free = (h: Hex) => !sim.motes.some((m) => same(m, h));
       const remove = (ids: number[]) => {
         sim = {
@@ -925,40 +952,98 @@ const boundary = (s: OrreryState, settle = false): OrreryState => {
   for (const p of parts.filter((v) => v.kind === "set")) {
     const pattern = s.challenge.products[p.index ?? 0];
     if (!pattern) continue;
-    const anchor = { q: p.q, r: p.r };
-    const ids = pattern.motes.map(
-      (m) =>
-        sim.motes.find(
-          (v) =>
-            same(v, add(anchor, rotate(m, p.rotation))) &&
-            v.type === m.type &&
-            v.wheel === null,
-        )?.id,
-    );
-    if (
-      ids.every((v) => v !== undefined) &&
-      !sim.grips.some((g) => ids.includes(g.mote)) &&
-      pattern.filaments.length ===
-        sim.filaments.filter((f) => ids.includes(f.a) || ids.includes(f.b))
-          .length &&
-      pattern.filaments.every((f) => {
-        const ia = pattern.motes.findIndex((m) => same(m, f.a)),
-          ib = pattern.motes.findIndex((m) => same(m, f.b));
-        return sim.filaments.some(
-          (v) =>
-            (v.a === ids[ia] && v.b === ids[ib] && v.weight === f.weight) ||
-            (v.a === ids[ib] && v.b === ids[ia] && v.weight === f.weight),
-        );
-      })
+    const origin = { q: p.q, r: p.r },
+      maxCopies = pattern.repeat
+        ? Math.floor(sim.motes.length / pattern.motes.length)
+        : 1;
+    for (
+      let copies = maxCopies;
+      copies >= (pattern.repeat ? C.REPEAT_MIN : 1);
+      copies--
     ) {
+      const vector = pattern.repeat?.vector ?? { q: 0, r: 0 };
+      const coordinates = Array.from({ length: copies }, (_, i) =>
+        pattern.motes.map((m) =>
+          add(
+            origin,
+            rotate(add(m, { q: vector.q * i, r: vector.r * i }), p.rotation),
+          ),
+        ),
+      );
+      const ids = coordinates.map((cells) =>
+        cells.map(
+          (h, j) =>
+            sim.motes.find(
+              (m) =>
+                same(m, h) &&
+                m.type === pattern.motes[j].type &&
+                m.wheel === null,
+            )?.id,
+        ),
+      );
+      if (ids.flat().some((id) => id === undefined)) continue;
+      const selected = ids.flat() as number[];
+      if (sim.grips.some((g) => component(sim, g.mote).has(selected[0])))
+        continue;
+      if (component(sim, selected[0]).size !== selected.length) continue;
+      const edges: { a: number; b: number; weight: number }[] = [];
+      for (let i = 0; i < copies; i++)
+        for (const f of pattern.filaments) {
+          const ai = pattern.motes.findIndex((m) => same(m, f.a)),
+            bi = pattern.motes.findIndex((m) => same(m, f.b));
+          edges.push({ a: ids[i][ai]!, b: ids[i][bi]!, weight: f.weight });
+        }
+      if (pattern.repeat)
+        for (let i = 0; i < copies - 1; i++) {
+          const a = add(
+              origin,
+              rotate(
+                add(pattern.repeat.link.a, {
+                  q: vector.q * i,
+                  r: vector.r * i,
+                }),
+                p.rotation,
+              ),
+            ),
+            b = add(
+              origin,
+              rotate(
+                add(pattern.repeat.link.b, {
+                  q: vector.q * i,
+                  r: vector.r * i,
+                }),
+                p.rotation,
+              ),
+            );
+          const ia = sim.motes.find((m) => same(m, a))?.id,
+            ib = sim.motes.find((m) => same(m, b))?.id;
+          if (ia === undefined || ib === undefined) break;
+          edges.push({ a: ia, b: ib, weight: pattern.repeat.link.weight });
+        }
+      const actual = sim.filaments.filter(
+        (f) => selected.includes(f.a) || selected.includes(f.b),
+      );
+      if (
+        actual.length !== edges.length ||
+        !edges.every((e) =>
+          actual.some(
+            (f) =>
+              f.weight === e.weight &&
+              ((f.a === e.a && f.b === e.b) || (f.a === e.b && f.b === e.a)),
+          ),
+        )
+      )
+        continue;
       sim = {
         ...sim,
-        motes: sim.motes.filter((v) => !ids.includes(v.id)),
+        motes: sim.motes.filter((m) => !selected.includes(m.id)),
         filaments: sim.filaments.filter(
-          (f) => !ids.includes(f.a) && !ids.includes(f.b),
+          (f) => !selected.includes(f.a) && !selected.includes(f.b),
         ),
-        tallies: sim.tallies.map((v, i) => (i === p.index ? v + 1 : v)),
+        grips: sim.grips.filter((g) => !selected.includes(g.mote)),
+        tallies: sim.tallies.map((v, i) => (i === p.index ? v + copies : v)),
       };
+      break;
     }
   }
   for (const p of parts.filter((v) => v.kind === "rise")) {
@@ -1152,6 +1237,12 @@ const oneCycle = (s: OrreryState): OrreryState => {
         },
       };
   }
+  const motionOwner = new Map<number, number>();
+  for (const mote of sim.motes) {
+    const grip = holdingGrip(sim, mote.id);
+    if (grip) motionOwner.set(mote.id, grip.part);
+    else if (mote.wheel !== null) motionOwner.set(mote.id, mote.wheel);
+  }
   for (let k = 1; k <= C.COLLISION_SAMPLES; k++) {
     const t = k / C.COLLISION_SAMPLES;
     const position = (m: MoteState) => {
@@ -1259,7 +1350,7 @@ const oneCycle = (s: OrreryState): OrreryState => {
       sim = {
         ...sim,
         motes: sim.motes.map((m) =>
-          heldBy(sim, p.id, m.id) || m.wheel === p.id
+          motionOwner.get(m.id) === p.id
             ? {
                 ...m,
                 ...add(
@@ -1302,7 +1393,9 @@ const oneCycle = (s: OrreryState): OrreryState => {
       sim = {
         ...sim,
         motes: sim.motes.map((m) =>
-          heldBy(sim, p.id, m.id) ? { ...m, q: m.q + d.q, r: m.r + d.r } : m,
+          motionOwner.get(m.id) === p.id
+            ? { ...m, q: m.q + d.q, r: m.r + d.r }
+            : m,
         ),
       };
     }
@@ -1313,7 +1406,7 @@ const oneCycle = (s: OrreryState): OrreryState => {
       sim = {
         ...sim,
         motes: sim.motes.map((m) =>
-          heldBy(sim, p.id, m.id) || m.wheel === p.id
+          motionOwner.get(m.id) === p.id
             ? { ...m, q: m.q + delta.q, r: m.r + delta.r }
             : m,
         ),
@@ -1415,6 +1508,7 @@ const tapeWindow = (editor: EditorState) => {
     ),
   };
 };
+const pendingPointerCues = new Set<C.CueName>();
 const pointerEvent = (
   s: OrreryState,
   type: "down" | "move" | "up",
@@ -1646,6 +1740,14 @@ const pointerEvent = (
       }
     }
     if (parts !== ed.parts) {
+      if (
+        drag.kind === "place" ||
+        (drag.kind === "move" &&
+          parts.some(
+            (p, i) => p.q !== ed.parts[i]?.q || p.r !== ed.parts[i]?.r,
+          ))
+      )
+        pendingPointerCues.add(C.CUES.place);
       const committed = edit(v, parts, selected);
       return { ...committed, editor: { ...committed.editor, drag: null } };
     }
@@ -1681,7 +1783,9 @@ const keyboard = (s: OrreryState, a: string): OrreryState => {
         ? close(s, "title")
         : s.screen === "howto"
           ? { ...s, screen: "title", menuIndex: s.titleIndex, howtoPage: 0 }
-          : s;
+          : s.screen === "editor" && s.sim?.status === "complete"
+            ? { ...s, sim: null }
+            : s;
     if (s.screen === "howto" && (a === "left" || a === "right"))
       return {
         ...s,
@@ -2876,9 +2980,38 @@ const reference = (mode: Mode, index: number): Solution => {
   }
   return serializeSolution(state.editor.parts);
 };
+const whole = (n: number, label: string, min = 0, max = Infinity) => {
+  if (!Number.isInteger(n) || n < min || n > max)
+    throw Error(`invalid ${label}`);
+  return n;
+};
+const findMote = (sim: SimState, id: number) => {
+  const mote = sim.motes.find((m) => m.id === id);
+  if (!mote) throw Error(`unknown mote ${id}`);
+  return mote;
+};
+const findPose = (sim: SimState, id: number) => {
+  const pose = sim.poses.find((p) => p.part === id);
+  if (!pose) throw Error(`unknown live part ${id}`);
+  return pose;
+};
+const checkMode = (mode: Mode) => {
+  if (mode !== "campaign" && mode !== "extras") throw Error("invalid mode");
+  return mode;
+};
+const checkModeIndex = (mode: Mode, index: number) =>
+  whole(
+    index,
+    `${checkMode(mode)} challenge index`,
+    0,
+    course(mode).length - 1,
+  );
 const debug = {
   version: C.ORRERY_DEBUG_VERSION,
-  reset: (s: DeepReadonly<OrreryState>) => ({ ...fresh(), muted: s.muted }),
+  reset: (s: DeepReadonly<OrreryState>) => {
+    pendingPointerCues.clear();
+    return { ...fresh(), muted: s.muted };
+  },
   reconcile: (s: DeepReadonly<OrreryState>) => s as OrreryState,
   setCompletion: (s: DeepReadonly<OrreryState>, enabled: boolean) =>
     ({ ...s, completion: enabled }) as OrreryState,
@@ -2900,15 +3033,24 @@ const debug = {
                 : s.selectIndex,
           } as OrreryState),
   setMode: (s: DeepReadonly<OrreryState>, mode: Mode) =>
-    ({ ...s, mode }) as OrreryState,
+    ({ ...s, mode: checkMode(mode) }) as OrreryState,
   setMenuIndex: (s: DeepReadonly<OrreryState>, n: number) =>
-    ({ ...s, menuIndex: n }) as OrreryState,
+    ({
+      ...s,
+      menuIndex: whole(n, "menu index", 0, menuCount(s as OrreryState) - 1),
+    }) as OrreryState,
   setSelectIndex: (s: DeepReadonly<OrreryState>, n: number) =>
-    ({ ...s, selectIndex: n }) as OrreryState,
+    ({ ...s, selectIndex: checkModeIndex(s.mode, n) }) as OrreryState,
   setHowtoPage: (s: DeepReadonly<OrreryState>, n: number) =>
-    ({ ...s, howtoPage: n }) as OrreryState,
+    ({
+      ...s,
+      howtoPage: whole(n, "howto page", 0, C.HOWTO_PAGES - 1),
+    }) as OrreryState,
   setUnlockedCount: (s: DeepReadonly<OrreryState>, n: number) =>
-    ({ ...s, unlockedCount: n }) as OrreryState,
+    ({
+      ...s,
+      unlockedCount: whole(n, "unlocked count", 1, campaign.length),
+    }) as OrreryState,
   setSolved: (
     s: DeepReadonly<OrreryState>,
     mode: Mode,
@@ -2917,16 +3059,17 @@ const debug = {
   ) =>
     ({
       ...s,
-      [mode === "campaign" ? "campaignSolved" : "extrasSolved"]: solved
-        ? [
-            ...new Set([
-              ...(mode === "campaign" ? s.campaignSolved : s.extrasSolved),
-              index,
-            ]),
-          ].sort((a, b) => a - b)
-        : (mode === "campaign" ? s.campaignSolved : s.extrasSolved).filter(
-            (n) => n !== index,
-          ),
+      [mode === "campaign" ? "campaignSolved" : "extrasSolved"]:
+        (checkModeIndex(mode, index), solved)
+          ? [
+              ...new Set([
+                ...(mode === "campaign" ? s.campaignSolved : s.extrasSolved),
+                index,
+              ]),
+            ].sort((a, b) => a - b)
+          : (mode === "campaign" ? s.campaignSolved : s.extrasSolved).filter(
+              (n) => n !== index,
+            ),
     }) as OrreryState,
   setRecord: (
     s: DeepReadonly<OrreryState>,
@@ -2935,6 +3078,10 @@ const debug = {
     metric: keyof Metrics,
     value: number,
   ) => {
+    checkModeIndex(mode, index);
+    whole(value, "record value");
+    if (!["cost", "cycles", "area"].includes(metric))
+      throw Error("invalid metric");
     const field = mode === "campaign" ? "campaignRecords" : "extrasRecords",
       arr = [...s[field]];
     arr[index] = {
@@ -2946,7 +3093,10 @@ const debug = {
   setLast: (s: DeepReadonly<OrreryState>, mode: Mode, index: number) =>
     ({
       ...s,
-      [mode === "campaign" ? "campaignLast" : "extrasLast"]: index,
+      [mode === "campaign" ? "campaignLast" : "extrasLast"]: checkModeIndex(
+        mode,
+        index,
+      ),
     }) as OrreryState,
   menuItemRect: (s: DeepReadonly<OrreryState>, index: number) =>
     menuRect(s as OrreryState, index),
@@ -2966,8 +3116,11 @@ const debug = {
     mode: Mode,
     index: number,
   ) => reference(mode, index),
-  clearMachine: (s: DeepReadonly<OrreryState>) =>
-    ({ ...needChallenge(s), editor: emptyEditor() }) as OrreryState,
+  clearMachine: (s: DeepReadonly<OrreryState>) => {
+    let v = needChallenge(s);
+    for (const p of s.editor.parts) v = debug.removePart(v, p.id);
+    return { ...v, editor: emptyEditor() };
+  },
   placePart: (
     s: DeepReadonly<OrreryState>,
     kind: PartKind,
@@ -3009,14 +3162,34 @@ const debug = {
     })),
   closeTrack: (s: DeepReadonly<OrreryState>, part: number) =>
     updatePart(needChallenge(s), part, (p) => ({ ...p, closed: true })),
-  removePart: (s: DeepReadonly<OrreryState>, part: number) =>
-    ({
-      ...needChallenge(s),
+  removePart: (s: DeepReadonly<OrreryState>, part: number) => {
+    needChallenge(s);
+    if (!s.editor.parts.some((p) => p.id === part)) throw Error("unknown part");
+    const sim = s.sim
+      ? {
+          ...s.sim,
+          poses: s.sim.poses.filter((p) => p.part !== part),
+          grips: s.sim.grips.filter((g) => g.part !== part),
+          motes: s.sim.motes.filter((m) => m.wheel !== part),
+          filaments: s.sim.filaments.filter(
+            (f) =>
+              !s.sim!.motes.some(
+                (m) => m.wheel === part && [f.a, f.b].includes(m.id),
+              ),
+          ),
+        }
+      : null;
+    return {
+      ...s,
       editor: {
         ...s.editor,
         parts: s.editor.parts.filter((p) => p.id !== part),
+        selected: s.editor.selected === part ? null : s.editor.selected,
+        cursor: s.editor.cursor?.part === part ? null : s.editor.cursor,
       },
-    }) as OrreryState,
+      sim,
+    } as OrreryState;
+  },
   setPartRotation: (
     s: DeepReadonly<OrreryState>,
     part: number,
@@ -3047,6 +3220,10 @@ const debug = {
     instruction: TapeCell,
   ) =>
     updatePart(needChallenge(s), part, (p) => {
+      whole(col, "tape column");
+      if (p.tape === null) throw Error("part has no tape row");
+      if (instruction !== null && !C.INSTRUCTIONS.includes(instruction))
+        throw Error("invalid instruction");
       const tape = [...(p.tape ?? [])];
       while (tape.length <= col) tape.push(null);
       tape[col] = instruction;
@@ -3054,8 +3231,14 @@ const debug = {
       return { ...p, tape };
     }),
   loadSolution: (s: DeepReadonly<OrreryState>, solution: Solution) => {
-    let v = { ...needChallenge(s), editor: emptyEditor() } as OrreryState;
+    let v = debug.clearMachine(needChallenge(s));
     for (const part of solution.parts) {
+      if (
+        !v.challenge?.permitted.includes(part.kind) &&
+        part.kind !== "rise" &&
+        part.kind !== "set"
+      )
+        throw Error("solution part not permitted");
       const origin = part.cells?.[0] ?? { q: part.q ?? 0, r: part.r ?? 0 };
       const p = {
         ...newPart(
@@ -3076,15 +3259,30 @@ const debug = {
   },
   readSolution: (s: DeepReadonly<OrreryState>) =>
     serializeSolution(s.editor.parts),
-  setSelected: (s: DeepReadonly<OrreryState>, part: number | null) =>
-    ({ ...s, editor: { ...s.editor, selected: part } }) as OrreryState,
-  setFocus: (s: DeepReadonly<OrreryState>, focus: Focus) =>
-    ({ ...s, editor: { ...s.editor, focus } }) as OrreryState,
-  setCursor: (s: DeepReadonly<OrreryState>, part: number | null, col: number) =>
-    ({
+  setSelected: (s: DeepReadonly<OrreryState>, part: number | null) => {
+    if (part !== null && !s.editor.parts.some((p) => p.id === part))
+      throw Error("unknown part");
+    return { ...s, editor: { ...s.editor, selected: part } } as OrreryState;
+  },
+  setFocus: (s: DeepReadonly<OrreryState>, focus: Focus) => {
+    if (focus !== "field" && focus !== "tape") throw Error("invalid focus");
+    return { ...s, editor: { ...s.editor, focus } } as OrreryState;
+  },
+  setCursor: (
+    s: DeepReadonly<OrreryState>,
+    part: number | null,
+    col: number,
+  ) => {
+    if (part !== null) {
+      whole(col, "cursor column");
+      const row = s.editor.parts.find((p) => p.id === part);
+      if (!row || !rows(row)) throw Error("part has no tape row");
+    }
+    return {
       ...s,
       editor: { ...s.editor, cursor: part === null ? null : { part, col } },
-    }) as OrreryState,
+    } as OrreryState;
+  },
   pointerDown: (s: DeepReadonly<OrreryState>, x: number, y: number) =>
     pointerEvent(s as OrreryState, "down", x, y),
   pointerMove: (s: DeepReadonly<OrreryState>, x: number, y: number) =>
@@ -3093,18 +3291,29 @@ const debug = {
     pointerEvent(s as OrreryState, "up", s.pointer.x, s.pointer.y),
   startRun: (s: DeepReadonly<OrreryState>) => start(needChallenge(s)),
   stopRun: (s: DeepReadonly<OrreryState>) =>
-    ({ ...s, sim: null }) as OrreryState,
+    ({ ...needSim(s), sim: null }) as OrreryState,
   setPaused: (s: DeepReadonly<OrreryState>, paused: boolean) =>
-    modSim(s, (sim) => ({ ...sim, status: paused ? "paused" : "running" })),
+    modSim(s, (sim) => {
+      if (sim.status === "faulted" || sim.status === "complete")
+        throw Error("run is stopped");
+      return { ...sim, status: paused ? "paused" : "running" };
+    }),
   setSpeed: (s: DeepReadonly<OrreryState>, speed: number) =>
-    modSim(s, (sim) => ({ ...sim, speed })),
-  setCycle: (s: DeepReadonly<OrreryState>, cycle: number) =>
-    modSim(s, (sim) => ({ ...sim, cycle })),
-  setTally: (s: DeepReadonly<OrreryState>, index: number, n: number) =>
     modSim(s, (sim) => ({
       ...sim,
-      tallies: sim.tallies.map((v, i) => (i === index ? n : v)),
+      speed: whole(speed, "speed", 0, C.SPEEDS.length - 1),
     })),
+  setCycle: (s: DeepReadonly<OrreryState>, cycle: number) =>
+    modSim(s, (sim) => ({ ...sim, cycle: whole(cycle, "cycle") })),
+  setTally: (s: DeepReadonly<OrreryState>, index: number, n: number) =>
+    modSim(s, (sim) => {
+      whole(index, "tally index", 0, sim.tallies.length - 1);
+      whole(n, "tally");
+      return {
+        ...sim,
+        tallies: sim.tallies.map((v, i) => (i === index ? n : v)),
+      };
+    }),
   clearMotes: (s: DeepReadonly<OrreryState>) =>
     modSim(s, (sim) => ({ ...sim, motes: [], filaments: [], grips: [] })),
   spawnMote: (
@@ -3112,72 +3321,156 @@ const debug = {
     q: number,
     r: number,
     type: MoteType,
-  ) => modSim(s, (sim) => spawn(sim, { q, r }, type)),
+  ) =>
+    modSim(s, (sim) => {
+      if (
+        !Number.isInteger(q) ||
+        !Number.isInteger(r) ||
+        !C.MOTES.includes(type)
+      )
+        throw Error("invalid mote");
+      if (sim.motes.some((m) => m.q === q && m.r === r))
+        throw Error("mote hex occupied");
+      return spawn(sim, { q, r }, type);
+    }),
   removeMote: (s: DeepReadonly<OrreryState>, id: number) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      motes: sim.motes.filter((m) => m.id !== id),
-      filaments: sim.filaments.filter((f) => f.a !== id && f.b !== id),
-      grips: sim.grips.filter((g) => g.mote !== id),
-    })),
+    modSim(s, (sim) => {
+      findMote(sim, id);
+      return {
+        ...sim,
+        motes: sim.motes.filter((m) => m.id !== id),
+        filaments: sim.filaments.filter((f) => f.a !== id && f.b !== id),
+        grips: sim.grips.filter((g) => g.mote !== id),
+      };
+    }),
   linkMotes: (
     s: DeepReadonly<OrreryState>,
     a: number,
     b: number,
     weight: number,
   ) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      filaments: [...sim.filaments, { a, b, weight }],
-    })),
+    modSim(s, (sim) => {
+      const x = findMote(sim, a),
+        y = findMote(sim, b);
+      if (
+        x.wheel !== null ||
+        y.wheel !== null ||
+        ![1, 3].includes(weight) ||
+        !C.DIRS.some(([q, r]) => same(add(x, { q, r }), y)) ||
+        sim.filaments.some(
+          (f) => (f.a === a && f.b === b) || (f.a === b && f.b === a),
+        )
+      )
+        throw Error("invalid filament");
+      return { ...sim, filaments: [...sim.filaments, { a, b, weight }] };
+    }),
   unlinkMotes: (s: DeepReadonly<OrreryState>, a: number, b: number) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      filaments: sim.filaments.filter(
-        (f) => !((f.a === a && f.b === b) || (f.a === b && f.b === a)),
-      ),
-    })),
+    modSim(s, (sim) => {
+      if (
+        !sim.filaments.some(
+          (f) => (f.a === a && f.b === b) || (f.a === b && f.b === a),
+        )
+      )
+        throw Error("filament not found");
+      return {
+        ...sim,
+        filaments: sim.filaments.filter(
+          (f) => !((f.a === a && f.b === b) || (f.a === b && f.b === a)),
+        ),
+      };
+    }),
   setGrip: (
     s: DeepReadonly<OrreryState>,
     part: number,
     spoke: number,
     mote: number,
   ) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      grips: [...sim.grips, { part, spoke, mote }],
-    })),
+    modSim(s, (sim) => {
+      const subject = s.editor.parts.find((p) => p.id === part),
+        pose = findPose(sim, part),
+        body = findMote(sim, mote);
+      whole(spoke, "spoke", 0, 5);
+      if (
+        !subject ||
+        !arms.includes(subject.kind) ||
+        !spokeDirs(subject, pose.rotation).includes(spoke) ||
+        body.wheel !== null ||
+        !same(body, add(pose.cell, offset(spoke, pose.length)))
+      )
+        throw Error("invalid grip");
+      return {
+        ...sim,
+        grips: [
+          ...sim.grips.filter((g) => !(g.part === part && g.spoke === spoke)),
+          { part, spoke, mote },
+        ],
+      };
+    }),
   releaseGrip: (s: DeepReadonly<OrreryState>, part: number, spoke: number) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      grips: sim.grips.filter((g) => !(g.part === part && g.spoke === spoke)),
-    })),
+    modSim(s, (sim) => {
+      const subject = s.editor.parts.find((p) => p.id === part),
+        pose = findPose(sim, part);
+      whole(spoke, "spoke", 0, 5);
+      if (
+        !subject ||
+        !arms.includes(subject.kind) ||
+        !spokeDirs(subject, pose.rotation).includes(spoke)
+      )
+        throw Error("invalid gripper");
+      return {
+        ...sim,
+        grips: sim.grips.filter((g) => !(g.part === part && g.spoke === spoke)),
+      };
+    }),
   setPoseRotation: (
     s: DeepReadonly<OrreryState>,
     part: number,
     rotation: number,
   ) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      poses: sim.poses.map((p) => (p.part === part ? { ...p, rotation } : p)),
-    })),
+    modSim(s, (sim) => {
+      findPose(sim, part);
+      whole(rotation, "rotation", 0, 5);
+      return {
+        ...sim,
+        poses: sim.poses.map((p) => (p.part === part ? { ...p, rotation } : p)),
+      };
+    }),
   setPoseLength: (s: DeepReadonly<OrreryState>, part: number, length: number) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      poses: sim.poses.map((p) => (p.part === part ? { ...p, length } : p)),
-    })),
+    modSim(s, (sim) => {
+      findPose(sim, part);
+      const subject = s.editor.parts.find((p) => p.id === part);
+      if (!subject || !arms.includes(subject.kind))
+        throw Error("part has no length");
+      whole(length, "length", 1, 3);
+      return {
+        ...sim,
+        poses: sim.poses.map((p) => (p.part === part ? { ...p, length } : p)),
+      };
+    }),
   setPoseCell: (
     s: DeepReadonly<OrreryState>,
     part: number,
     q: number,
     r: number,
   ) =>
-    modSim(s, (sim) => ({
-      ...sim,
-      poses: sim.poses.map((p) =>
-        p.part === part ? { ...p, cell: { q, r } } : p,
-      ),
-    })),
+    modSim(s, (sim) => {
+      const pose = findPose(sim, part);
+      if (
+        !s.editor.parts.some(
+          (p) =>
+            p.kind === "track" &&
+            p.cells?.some((h) => same(h, pose.cell)) &&
+            p.cells?.some((h) => h.q === q && h.r === r),
+        )
+      )
+        throw Error("cell is not on a track");
+      return {
+        ...sim,
+        poses: sim.poses.map((p) =>
+          p.part === part ? { ...p, cell: { q, r } } : p,
+        ),
+      };
+    }),
   snapshot: (s: DeepReadonly<OrreryState>) => ({
     version: C.ORRERY_DEBUG_VERSION,
     screen: s.screen,
@@ -3362,17 +3655,20 @@ export const game: Game<OrreryState, OrreryDebugApi> = {
         rem -= 1;
       }
     }
+    const frameCues = new Set<C.CueName>(pendingPointerCues);
+    pendingPointerCues.clear();
     if (oldParts !== s.editor.parts.length)
-      api.audio.play(
+      frameCues.add(
         oldParts < s.editor.parts.length ? C.CUES.place : C.CUES.erase,
       );
-    if (!was && s.sim) api.audio.play(C.CUES.start);
+    if (!was && s.sim) frameCues.add(C.CUES.start);
     if ((s.sim?.tallies.reduce((a, b) => a + b, 0) ?? 0) > oldTally)
-      api.audio.play(C.CUES.constellation);
+      frameCues.add(C.CUES.constellation);
     if (was !== "faulted" && s.sim?.status === "faulted")
-      api.audio.play(C.CUES.halt);
+      frameCues.add(C.CUES.halt);
     if (was !== "complete" && s.sim?.status === "complete")
-      api.audio.play(C.CUES.complete);
+      frameCues.add(C.CUES.complete);
+    for (const cue of frameCues) api.audio.play(cue);
     return { ...s, muted: api.audio.muted() };
   },
   render(state: DeepReadonly<OrreryState>, api: RenderApi) {

@@ -102,4 +102,61 @@ describe("the machine", () => {
     expect(s.sim?.fault?.kind).toBe("collision");
     expect(s.sim?.fraction).toBe(3 / 8);
   });
+  it("requires a linked chain before a repeating set counts a procession", () => {
+    let s = orreryCore.open(orreryCore.fresh(), "extras", 9);
+    s = {
+      ...s,
+      editor: {
+        ...s.editor,
+        parts: [
+          {
+            id: 1,
+            kind: "set",
+            q: 0,
+            r: 0,
+            rotation: 0,
+            length: 1,
+            cells: null,
+            closed: null,
+            index: 0,
+            tape: null,
+          },
+        ],
+        nextId: 2,
+      },
+    };
+    s = orreryCore.start(s);
+    s = {
+      ...s,
+      sim: {
+        ...s.sim!,
+        motes: [{ id: 1, q: 0, r: 0, type: "luna", wheel: null }],
+        nextMoteId: 2,
+      },
+    };
+    s = orreryCore.oneCycle(s);
+    expect(s.sim?.tallies).toEqual([0]);
+    s = {
+      ...s,
+      sim: {
+        ...s.sim!,
+        motes: [
+          { id: 1, q: 0, r: 0, type: "luna", wheel: null },
+          { id: 2, q: 1, r: 0, type: "luna", wheel: null },
+        ],
+        filaments: [{ a: 1, b: 2, weight: 1 }],
+        nextMoteId: 3,
+      },
+    };
+    s = orreryCore.oneCycle(s);
+    expect(s.sim?.tallies).toEqual([2]);
+  });
+  it("completes the First Light reference on the Extras shelf", () => {
+    let s = orreryCore.open(orreryCore.fresh(), "extras", 0);
+    s = orreryCore.loadSolution(s, orreryCore.reference("extras", 0));
+    s = orreryCore.start(s);
+    for (let i = 0; i < 40 && s.sim?.status === "running"; i++)
+      s = orreryCore.oneCycle(s);
+    expect(s.sim?.status).toBe("complete");
+  });
 });
