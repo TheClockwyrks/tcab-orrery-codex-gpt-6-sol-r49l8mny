@@ -328,16 +328,7 @@ const campaignNames = [
   "The Aether Loom",
   "The Grand Orrery",
 ];
-const campaignTypes: MoteType[] = [
-  "sol",
-  "sol",
-  "luna",
-  "luna",
-  "comet",
-  "comet",
-  "nova",
-  "nova",
-];
+const campaignSeedIndices = [0, 1, 2, 4, 5, 6, 7, 3];
 const referenceExtras: PartKind[][] = [
   [],
   ["biarm"],
@@ -346,16 +337,30 @@ const referenceExtras: PartKind[][] = [
   ["piston", "track", "sunder", "wane"],
   ["wheel", "mirror", "ascend", "conjoin", "eclipse"],
   ["confluence", "dispersion", "void", "biarm", "triarm", "bind"],
-  ["wheel", "piston", "track", "hexarm", "manifold", "triune", "sunder"],
+  [
+    "wheel",
+    "piston",
+    "track",
+    "hexarm",
+    "manifold",
+    "triune",
+    "sunder",
+    "dispersion",
+    "void",
+    "biarm",
+  ],
 ];
+const opening = normMol({
+  motes: [{ q: 0, r: 0, type: "comet" }],
+  filaments: [],
+});
 const campaign: Challenge[] = campaignNames.map((name, i) => {
-  const type = campaignTypes[i],
-    pattern = normMol({ motes: [{ q: 0, r: 0, type }], filaments: [] });
+  const seed = extras[campaignSeedIndices[i]];
   return {
+    ...seed,
     name,
-    reagents: [pattern],
-    products: [pattern],
-    permitted: ["arm", ...referenceExtras[i]],
+    ...(i === 0 ? { reagents: [opening], products: [opening] } : {}),
+    permitted: [...new Set([...seed.permitted, ...referenceExtras[i]])],
     target: C.CONSTELLATION_TARGET,
   };
 });
@@ -2932,6 +2937,407 @@ const validateChallenge = (raw: Challenge): Challenge => {
     products: raw.products.map(normMol),
   };
 };
+const pairFeed: TapeCell[] = [
+  "grab",
+  "rotate-cw",
+  "rotate-cw",
+  "drop",
+  "rotate-ccw",
+  "rotate-ccw",
+  "grab",
+  "rotate-cw",
+  "drop",
+  "rotate-ccw",
+];
+const pairCarrier: TapeCell[] = [
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  "grab",
+  "rotate-cw",
+  "drop",
+  "rotate-ccw",
+];
+const pairReference = (sigil: PartKind): Solution => ({
+  parts: [
+    { kind: "rise", index: 0, q: 2, r: 0, rotation: 0 },
+    { kind: "set", index: 0, q: -1, r: 1, rotation: 1 },
+    { kind: sigil, q: 0, r: 1, rotation: 0 },
+    { kind: "arm", q: 1, r: 0, rotation: 0, length: 1, tape: pairFeed },
+    { kind: "arm", q: 0, r: 0, rotation: 1, length: 1, tape: pairCarrier },
+  ],
+});
+const extraReferences: Readonly<Record<number, Solution>> = {
+  1: pairReference("bind"),
+  2: {
+    parts: [
+      { kind: "rise", index: 0, q: 2, r: 0, rotation: 0 },
+      { kind: "set", index: 0, q: -1, r: 1, rotation: 2 },
+      { kind: "wane", q: 1, r: 1, rotation: 0 },
+      { kind: "bind", q: 0, r: 0, rotation: 1 },
+      {
+        kind: "arm",
+        q: 1,
+        r: 0,
+        rotation: 0,
+        length: 1,
+        tape: [
+          "grab",
+          "rotate-cw",
+          "rotate-cw",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+          "rotate-ccw",
+          "rotate-ccw",
+          "grab",
+          "rotate-cw",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+          "rotate-ccw",
+        ],
+      },
+      {
+        kind: "arm",
+        q: -1,
+        r: 0,
+        rotation: 0,
+        length: 1,
+        tape: [
+          ...Array(12).fill(null),
+          "grab",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+        ],
+      },
+    ],
+  },
+  3: {
+    parts: [
+      { kind: "rise", index: 0, q: 3, r: 0, rotation: 0 },
+      {
+        kind: "wheel",
+        q: 1,
+        r: -1,
+        rotation: 5,
+        length: 1,
+        tape: [
+          ...Array(8).fill(null),
+          "rotate-cw",
+          ...Array(10).fill(null),
+          "rotate-ccw",
+          ...Array(4).fill(null),
+        ],
+      },
+      { kind: "mirror", q: 1, r: 0, rotation: 1 },
+      { kind: "bind", q: -1, r: 2, rotation: 0 },
+      { kind: "set", index: 0, q: -2, r: 3, rotation: 1 },
+      ...(
+        [
+          {
+            q: 2,
+            r: 0,
+            rotation: 0,
+            tape: [
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+              null,
+              null,
+              null,
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: 0,
+            r: 1,
+            rotation: 0,
+            tape: [
+              null,
+              null,
+              null,
+              null,
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+              null,
+              null,
+              null,
+              "grab",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: -2,
+            r: 2,
+            rotation: 0,
+            tape: [
+              ...Array(16).fill(null),
+              "grab",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+            ],
+          },
+        ] as { q: number; r: number; rotation: number; tape: TapeCell[] }[]
+      ).map((p) => ({
+        kind: "arm" as const,
+        ...p,
+        length: 1,
+        tape: [
+          ...p.tape,
+          ...Array(24 - p.tape.length).fill(null),
+        ] as TapeCell[],
+      })),
+    ],
+  },
+  4: {
+    parts: [
+      { kind: "rise", index: 0, q: 2, r: 0, rotation: 0 },
+      { kind: "rise", index: 1, q: 3, r: 0, rotation: 0 },
+      { kind: "set", index: 0, q: 0, r: 2, rotation: 0 },
+      { kind: "ascend", q: 0, r: 1, rotation: 0 },
+      {
+        kind: "arm",
+        q: 1,
+        r: 0,
+        rotation: 0,
+        length: 1,
+        tape: [
+          "grab",
+          "rotate-cw",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+          "rotate-ccw",
+        ],
+      },
+      {
+        kind: "arm",
+        q: 2,
+        r: 0,
+        rotation: 0,
+        length: 1,
+        tape: [
+          null,
+          null,
+          null,
+          "grab",
+          "rotate-cw",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+          "rotate-ccw",
+        ],
+      },
+      {
+        kind: "arm",
+        q: 0,
+        r: 1,
+        rotation: 0,
+        length: 1,
+        tape: [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "grab",
+          "rotate-cw",
+          "drop",
+          "rotate-ccw",
+        ],
+      },
+    ],
+  },
+  5: {
+    parts: [
+      { kind: "rise", index: 0, q: 2, r: 0, rotation: 0 },
+      { kind: "set", index: 0, q: -1, r: 2, rotation: 0 },
+      { kind: "conjoin", q: 0, r: 1, rotation: 0 },
+      { kind: "arm", q: 1, r: 0, rotation: 0, length: 1, tape: pairFeed },
+      { kind: "arm", q: 0, r: 1, rotation: 1, length: 1, tape: pairCarrier },
+    ],
+  },
+  6: {
+    parts: [
+      { kind: "rise", index: 0, q: 2, r: 0, rotation: 0 },
+      { kind: "eclipse", q: 0, r: 1, rotation: 0 },
+      { kind: "bind", q: 1, r: 2, rotation: 5 },
+      { kind: "set", index: 0, q: 0, r: 3, rotation: 0 },
+      ...(
+        [
+          { q: 1, r: 0, rotation: 0, tape: pairFeed },
+          {
+            q: 1,
+            r: 1,
+            rotation: 2,
+            tape: [
+              ...Array(12).fill(null),
+              "grab",
+              "rotate-ccw",
+              "drop",
+              "rotate-cw",
+            ],
+          },
+          {
+            q: 2,
+            r: 0,
+            rotation: 3,
+            tape: [
+              ...Array(9).fill(null),
+              "grab",
+              "rotate-ccw",
+              "rotate-ccw",
+              "drop",
+              "rotate-cw",
+              "rotate-cw",
+            ],
+          },
+          {
+            q: 0,
+            r: 2,
+            rotation: 0,
+            tape: [
+              ...Array(16).fill(null),
+              "grab",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+            ],
+          },
+        ] as { q: number; r: number; rotation: number; tape: TapeCell[] }[]
+      ).map((p) => ({
+        kind: "arm" as const,
+        ...p,
+        length: 1,
+        tape: [
+          ...p.tape,
+          ...Array(24 - p.tape.length).fill(null),
+        ] as TapeCell[],
+      })),
+    ],
+  },
+  7: {
+    parts: [
+      { kind: "confluence", q: 0, r: 0, rotation: 0 },
+      { kind: "set", index: 0, q: -1, r: 1, rotation: 0 },
+      { kind: "rise", index: 0, q: 3, r: -1, rotation: 0 },
+      { kind: "rise", index: 1, q: 2, r: 1, rotation: 0 },
+      { kind: "rise", index: 2, q: -3, r: 1, rotation: 0 },
+      { kind: "rise", index: 3, q: -2, r: -1, rotation: 0 },
+      ...(
+        [
+          {
+            q: 2,
+            r: -1,
+            rotation: 0,
+            tape: [
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: 1,
+            r: 1,
+            rotation: 0,
+            tape: [
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: -2,
+            r: 1,
+            rotation: 3,
+            tape: [
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: -1,
+            r: -1,
+            rotation: 3,
+            tape: [
+              "grab",
+              "rotate-cw",
+              "rotate-cw",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+              "rotate-ccw",
+              "rotate-ccw",
+            ],
+          },
+          {
+            q: -1,
+            r: 0,
+            rotation: 0,
+            tape: [
+              null,
+              null,
+              null,
+              null,
+              null,
+              "grab",
+              "rotate-cw",
+              "drop",
+              "rotate-ccw",
+            ],
+          },
+        ] as { q: number; r: number; rotation: number; tape: TapeCell[] }[]
+      ).map((p) => ({
+        kind: "arm" as const,
+        ...p,
+        length: 1,
+        tape: [
+          ...p.tape,
+          ...Array(16 - p.tape.length).fill(null),
+        ] as TapeCell[],
+      })),
+    ],
+  },
+  8: pairReference("triune"),
+  9: pairReference("bind"),
+};
 const reference = (mode: Mode, index: number): Solution => {
   const challenge = course(mode)[index];
   if (!challenge) throw Error("challenge index outside course");
@@ -2947,9 +3353,10 @@ const reference = (mode: Mode, index: number): Solution => {
     { kind: "rise", index: 0, q: 1, r: 0, rotation: 0 },
     { kind: "set", index: 0, q: 0, r: 1, rotation: 0 },
   ];
-  if (mode === "extras") return { parts: base };
+  if (mode === "extras") return extraReferences[index] ?? { parts: base };
+  const core = extraReferences[campaignSeedIndices[index]] ?? { parts: base };
   let state = open(fresh(), mode, index);
-  for (const p of base) {
+  for (const p of core.parts) {
     const origin = { q: p.q ?? 0, r: p.r ?? 0 };
     state = usePart(state, {
       ...newPart(state, p.kind, origin, p.rotation ?? 0, p.index ?? null),
@@ -2958,6 +3365,7 @@ const reference = (mode: Mode, index: number): Solution => {
     });
   }
   for (const kind of referenceExtras[index]) {
+    if (core.parts.some((p) => p.kind === kind)) continue;
     let placed = false;
     for (const h of [...hexcells].sort(
       (a, b) =>
@@ -2978,7 +3386,16 @@ const reference = (mode: Mode, index: number): Solution => {
     }
     if (!placed) throw Error(`could not place reference ${kind}`);
   }
-  return serializeSolution(state.editor.parts);
+  const solution = serializeSolution(state.editor.parts);
+  if (index === campaign.length - 1)
+    return {
+      parts: solution.parts.map((p) =>
+        p.tape
+          ? { ...p, tape: [...p.tape, ...Array(25 - p.tape.length).fill(null)] }
+          : p,
+      ),
+    };
+  return solution;
 };
 const whole = (n: number, label: string, min = 0, max = Infinity) => {
   if (!Number.isInteger(n) || n < min || n > max)
