@@ -1,0 +1,15 @@
+[[media]]
+file = "machine-in-motion.json.gz"
+name = "A celestial machine built and run"
+
+[[media]]
+file = "building.png"
+name = "The workshop and its three placed parts"
+
+[[media]]
+file = "running.png"
+name = "A constellation reaches the set"
+
+[[media]]
+file = "solved.png"
+name = "A finished orbit and its records"
